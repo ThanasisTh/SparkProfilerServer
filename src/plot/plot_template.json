@@ -1,0 +1,18 @@
+{
+  "title_name": "Wordcount Comparison",
+  "legend_font_size": 14,
+  "figure_width": 5.5,
+  "figure_height": 3.5,
+  "label_size": 12,
+  "general_font_size": 10,
+  "x_tic_size": 12,
+  "y_tic_size": 12,
+  "x_lim": [0, 10],
+  "y_lim": [0, 10],
+  "x_label": "Input Size (MB)",
+  "y_label": "Execution Time (sec)",
+  "use_grid": true,
+  "should_show_figure": false,
+  "output_directory": "/home/stathis/",
+  "output_file": "/home/stathis/motivation_wordcount.eps"
+}

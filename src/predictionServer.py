@@ -13,6 +13,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score
 from sklearn.linear_model import LinearRegression
 from sklearn.externals import joblib
+from sklearn.preprocessing import normalize
 
 
 def predict(file, inputVector):
@@ -20,46 +21,15 @@ def predict(file, inputVector):
     y_pred = regressor.predict(inputVector[0])
 
     score = r2_score(y_test, y_pred)
-    print(score)
+    print(file + '------> ' + str(score))
 
 
 def train(df, stagedId: int, appName):
-    # client = MongoClient('localhost', 27017)
-    # print(str(client))
-    # db = client['dioneJson']
-    # collection = db['AllSparkApps']
-    # data_by_stages = {}
-    # data_headers = {'inputBytes': [], 'inputRecords': [], 'executors': [], 'numOfTasks': [], 'time': []}
-    # query = [{"$match": {}}, {"$addFields": {"stages": {"$filter": {"input": "$stages", "as": "stages", "cond": {"$eq": ["$$stages.stageID", 0]}}}}}]
-    #
-    # for doc in collection.aggregate(query):
-    #     stages = doc['stages']
-    #     executors = doc['executors']
-    #     for stage in stages:
-    #         stageID = stage['stageID']
-    #         if stageID is not None:
-    #             if stageID not in data_by_stages:
-    #                 data_by_stages[stageID] = data_headers
-    #             time = stage['time']
-    #             inputBytes = stage['inputBytes']
-    #             outputBytes = stage['outputBytes']
-    #             inputRecords = stage['inputRecords']
-    #             outputRecords = stage['outputRecords']
-    #             numOfTasks = stage['numOfTasks']
-    #
-    #             data_by_stages[stageID]['inputBytes'].append(inputBytes)
-    #             data_by_stages[stageID]['inputRecords'].append(inputRecords)
-    #             data_by_stages[stageID]['executors'].append(len(executors))
-    #             data_by_stages[stageID]['numOfTasks'].append(numOfTasks)
-    #             data_by_stages[stageID]['time'].append(time)
-    #
-    # df = pd.DataFrame.from_dict(data_by_stages[stagedId])
-
 
     y = df['time']
     x = df.drop('time', 1)
 
-    x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.1)
+    x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.01)
     regressor = LinearRegression()
     fit = regressor.fit(x_train, y_train)
 
@@ -78,8 +48,6 @@ if __name__ == '__main__':
     db = client['dioneJson']
     collection = db['AllSparkApps']
     data_by_stages = {}
-    data_headers = {'inputBytes': [], 'inputRecords': [], 'executors': [], 'numOfTasks': [], 'time': []}
-    data_header_names = data_headers.keys()
     # get count of apps with given name
     # find_max_stages_query = [{"$match": {"application_name": "AlsDataframe-Application"}},
     #                           {"$project": {"name": "$application_name",
@@ -95,27 +63,25 @@ if __name__ == '__main__':
 
     # get all stage ids from every execution
     for doc in result_doc:
-        print(doc)
         for stage in doc['stages']:
             if stage['stageID'] not in stage_ids:
                 stage_ids.append(stage['stageID'])
 
     for stage in stage_ids:
+
+        data_headers = {'inputBytes': [], 'inputRecords': [], 'executors': [], 'numOfTasks': [], 'time': []}
+        if stage not in data_by_stages.keys():
+            data_by_stages[stage] = data_headers
         get_stage_docs_query = [{"$match": {"application_name": "AlsDataframe-Application"}}, {"$addFields": {"stages": {
             "$filter": {"input": "$stages", "as": "stages", "cond": {"$eq": ["$$stages.stageID", stage]}}}}}]
         docs = collection.aggregate(get_stage_docs_query)
 
         for doc in docs:
-            executors = doc['executors']
-            if stage is not None:
-                if stage not in data_by_stages:
-                    data_by_stages[stage] = data_headers
-                try:
-                    stage_list = doc['stages'][0]
-                except IndexError:
-                    print(doc)
-                    pass
-                time = stage_list['time']
+            try:
+                stage_list = doc['stages'][0]
+
+                executors = doc['executors']
+                time = int(stage_list['time'])
                 inputBytes = stage_list['inputBytes']
                 outputBytes = stage_list['outputBytes']
                 inputRecords = stage_list['inputRecords']
@@ -127,9 +93,11 @@ if __name__ == '__main__':
                 data_by_stages[stage]['executors'].append(len(executors))
                 data_by_stages[stage]['numOfTasks'].append(numOfTasks)
                 data_by_stages[stage]['time'].append(time)
+            except IndexError:
+                pass
 
         df = pd.DataFrame.from_dict(data_by_stages[stage])
-
+        size = len(df)
         file, x_test, y_test = train(df, stage, 'AlsDataframe-Application')
 
         predict(file, (x_test, y_test))

@@ -20,49 +20,66 @@ from sklearn.kernel_ridge import KernelRidge
 from sklearn.ensemble import BaggingRegressor
 from src.plot.plotter import Plotter
 from sklearn.externals import joblib
+from sklearn.preprocessing import OneHotEncoder
 
-models = {"Linear Regression": LinearRegression, "Random Forest Regressor": RandomForestRegressor,
-          "SGD Regressor": SGDRegressor, "Bayesian Ridge": BayesianRidge,
-          "Bagging Regressor": BaggingRegressor, "Kernel Ridge": KernelRidge, "Decision Tree": DecisionTreeRegressor}
+models = {"Linear Regression": LinearRegression(fit_intercept=False), "Random Forest Regressor": RandomForestRegressor(),
+           "Bayesian Ridge": BayesianRidge(),
+          "Bagging Regressor": BaggingRegressor(), "Kernel Ridge": KernelRidge(), "Decision Tree": DecisionTreeRegressor()}
 
 dataHeaders = [#'applicationName', 'process',
-               'inputBytes', 'inputRecords', 'executors', 'shuffleWrite', 'time']
+               'executors', 'time', 'inputSplit', 'executorMemory', 'cores', 'application_id']
 
 def loadData():
     client = MongoClient('localhost', 27017)
     print(str(client))
     db = client['dioneJson']
     collection = db['AllApps']
+    name = 'Als Example'
 
-    data_headers = {'inputBytes': [], 'inputRecords': [], 'executors': [], 'numOfTasks': [], 'time': []}
+    encoder = OneHotEncoder()
+    data_headers = {'application_id': [], 'executors': [], 'time': [], 'inputSplit': [], 'executorMemory': [], 'cores': []}
     data_by_stages = {}
-    stages_by_app = {}
+    stages_by_app = {name: {}}
 
-    for doc in collection.find():
-        name = doc['application_name']
-        executors = doc['executors']
-        stages = doc['stages']
-        attempts = doc['attempts']
-        if name not in stages_by_app:
-            stages_by_app[name] = {}
+    find_all_query = {"application_name": name}
+    stage_ids = []
+    result_doc = list(collection.find(find_all_query))
 
-        for stage in stages:
-            stageID = stage['stageID']
-            if stageID is not None:
-                if stageID not in data_by_stages:
-                    data_by_stages[stageID] = data_headers
-                time = stage['time']
-                inputBytes = stage['inputBytes']
-                outputBytes = stage['outputBytes']
-                inputRecords = stage['inputRecords']
-                outputRecords = stage['outputRecords']
-                numOfTasks = stage['numOfTasks']
+    # get all stage ids from every execution
+    for doc in result_doc:
+        for stage in doc['stages']:
+            if stage['stageID'] not in stage_ids:
+                stage_ids.append(stage['stageID'])
 
-                data_by_stages[stageID]['inputBytes'].append(inputBytes)
-                data_by_stages[stageID]['inputRecords'].append(inputRecords)
-                data_by_stages[stageID]['executors'].append(len(executors))
-                data_by_stages[stageID]['numOfTasks'].append(numOfTasks)
-                data_by_stages[stageID]['time'].append(time)
+    # get data from all executions for each stage
+    for stage in stage_ids:
+
+        get_stage_docs_query = [{"$match": {"application_name": name}}, {"$addFields": {"stages": {
+            "$filter": {"input": "$stages", "as": "stages", "cond": {"$eq": ["$$stages.stageID", stage]}}}}}]
+        docs = collection.aggregate(get_stage_docs_query)
+        for doc in docs:
+            if stage is not None:
+                try:
+                    if stage not in data_by_stages:
+                        data_by_stages[stage] = {key: [] for key in data_headers.keys()}
+                    stage_list = doc['stages'][0]
+                    environment_list = doc['environment']
+
+                    id = doc['application_id']
+                    time = int(stage_list['time'])
+                    execMemory = environment_list['spark@executor@memory']
+                    split = environment_list['spark@split']
+                    executors = doc['executors']
+                    cores = environment_list['spark@cores@max']
+
+                    data_by_stages[stage]['application_id'].append(id)
+                    data_by_stages[stage]['inputSplit'].append(float(split.replace('@', '.')))
+                    data_by_stages[stage]['executorMemory'].append(int(execMemory[:-1]))
+                    data_by_stages[stage]['executors'].append(len(executors))
+                    data_by_stages[stage]['time'].append(time)
+                    data_by_stages[stage]['cores'].append(cores)
+                except IndexError:
+                    pass
 
             # for executor in executors:
             #     execID = executor['id']
@@ -73,46 +90,12 @@ def loadData():
 
     simple_apps = pd.DataFrame.from_dict(stages_by_app)
 
-    collection = db['ComplexAppsData']
-    for doc in collection.find():
-        name = doc['application_name']
-        executors = doc['executors']
-        stages = doc['stages']
-        attempts = doc['attempts']
-        if name not in stages_by_app:
-            stages_by_app[name] = {}
-
-        for stage in stages:
-            stageID = stage['stageID']
-            if stageID not in data_by_stages:
-                data_by_stages[stageID] = data_headers
-            time = stage['time']
-            inputBytes = stage['inputBytes']
-            outputBytes = stage['outputBytes']
-            inputRecords = stage['inputRecords']
-            outputRecords = stage['outputRecords']
-            numOfTasks = stage['numOfTasks']
-
-            data_by_stages[stageID]['inputBytes'].append(inputBytes)
-            data_by_stages[stageID]['inputRecords'].append(inputRecords)
-            data_by_stages[stageID]['executors'].append(len(executors))
-            data_by_stages[stageID]['numOfTasks'].append(numOfTasks)
-            data_by_stages[stageID]['time'].append(time)
-
-        # for executor in executors:
-        #     execID = executor['id']
-        #     inputSize = executor['input']
-        #     shuffleWrite = executor['shuffleWrite']
-
-        stages_by_app[name] = data_by_stages
-
-    complex_apps = pd.DataFrame.from_dict(stages_by_app)
-
-    return simple_apps, complex_apps
+    return simple_apps
 
 
-def predict(app_frame, complex_frame=None, validate=True):
+def predict(app_frame):
     config_dictionary = json.load(open('/home/thanasis/PycharmProjects/dionePredict/analysis.json'))
+
 
     test_sizes = config_dictionary['train_size']
     scores_per_app = {}
@@ -135,49 +118,56 @@ def predict(app_frame, complex_frame=None, validate=True):
 
             for size in range(len(test_sizes)):
                 if size not in total_app_time_real[app][model]:
-                    total_app_time_real[app][model][size] = 0
-                    total_app_time_pred[app][model][size] = 0
+                    total_app_time_real[app][model][size] = {}
+                    total_app_time_pred[app][model][size] = {}
                 predictions_per_stage = {}
                 for stageID in app_frame[app].keys():
                     stage = pd.DataFrame.from_dict(app_frame[app][stageID])
-                    for col in stage:
-                        stage[col] = norm(stage[col])
+                    # for col in stage:
+                    #     stage[col] = norm(stage[col])
 
                     if stageID not in predictions_per_stage:
-                        predictions_per_stage[stageID] = []
-                        real_per_stage[stageID] = []
+                        predictions_per_stage[stageID] = {}
+                        real_per_stage[stageID] = {}
 
+                    ids = stage['application_id']
                     y = stage['time']
-                    x = stage.drop('time', 1)
+                    x = stage.drop(['time', 'application_id'], 1)
 
-                    if validate:
-                        x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=test_sizes[size])
+                    x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=test_sizes[size])
 
-                    try:
-                        regressor = models[model]()
-                        regressor.fit(x_train, y_train)
+                    regressor = models[model]
+                    regressor.fit(x_train, y_train)
 
-                        # path = 'models/' + app + '/stage_' + str(stageID) + '/' + model + '/' + str(test_sizes[size])
-                        # if not os.path.exists(path):
-                        #     os.makedirs(path)
-                        # fl = path + '/model.pkl'
-                        # print(regressor)
-                        # print(fl)
+                    # path = 'models/' + app + '/stage_' + str(stageID) + '/' + model + '/' + str(test_sizes[size])
+                    # if not os.path.exists(path):
+                    #     os.makedirs(path)
+                    # fl = path + '/model.pkl'
+                    # print(regressor)
+                    # print(fl)
 
-                        # joblib.dump(fit, fl)
+                    # joblib.dump(fit, fl)
 
-                        y_pred = regressor.predict(x_test)
+                    y_pred = regressor.predict(x_test)
 
-                        predictions_per_stage[stageID] = y_pred
-                        real_per_stage[stageID] = y_test.values
-                        total_app_time_pred[app][model][size] += predictions_per_stage[stageID]
-                        total_app_time_real[app][model][size] += real_per_stage[stageID]
-                    except MemoryError:
-                        print("Memory error for model: " + model)
-                        del regressor
-                        pass
+                    for id in range(len(ids)):
+                        if id not in total_app_time_pred[app][model][size].keys():
+                            total_app_time_pred[app][model][size][ids[id]] = 0
+                            total_app_time_real[app][model][size][ids[id]] = 0
+                        if id not in range(len(y_test.values)):
+                            real_per_stage[stageID][ids[id]] = 0
+                            predictions_per_stage[stageID][ids[id]] = 0
+                        else:
+                            real_per_stage[stageID][ids[id]] = y_test.values[id]
+                            predictions_per_stage[stageID][ids[id]] = y_pred[id]
 
-                scores_per_app[app][model].append([test_sizes[size]*100, r2_score(total_app_time_real[app][model][size], total_app_time_pred[app][model][size])])
+                        total_app_time_pred[app][model][size][ids[id]] += predictions_per_stage[stageID][ids[id]]
+                        total_app_time_real[app][model][size][ids[id]] += real_per_stage[stageID][ids[id]]
+
+                real_list = [total_app_time_real[app][model][size][id] for id in total_app_time_real[app][model][size].keys()]
+                pred_list = [total_app_time_pred[app][model][size][id] for id in total_app_time_pred[app][model][size].keys()]
+
+                scores_per_app[app][model].append([test_sizes[size]*100, r2_score(real_list, pred_list)])
 
     # TODO: Fix to include other sizes, store results for everything, make multiple figures
     for app in app_frame.keys():
@@ -211,5 +201,5 @@ def norm(df):
 
 
 if __name__ == '__main__':
-    df, _ = loadData()
+    df = loadData()
     predict(df)

@@ -25,7 +25,6 @@ class Plotter:
         :param kwargs: the dictionary that will keep all the arguments.
         :return: None.
         """
-
         if 'general_font_size' in kwargs:
             font = {'family': 'sans-serif', 'serif': ['Helvetica'], 'size': kwargs['general_font_size']}
             matplotlib.rc('font', **font)
@@ -35,6 +34,8 @@ class Plotter:
         if 'figure_width' in kwargs and 'figure_height' in kwargs:
             figure.set_size_inches(kwargs['figure_width'], kwargs['figure_height'])
 
+        if 'title' in kwargs:
+            figure.suptitle(kwargs['title'], fontsize=12)
         ax = figure.add_subplot(111)
 
         if 'x_tic_size' in kwargs:

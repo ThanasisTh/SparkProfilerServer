@@ -1,6 +1,9 @@
+import datetime
 import os
 import matplotlib
 import pandas as pd
+import sys
+import dateutil.parser
 from flask import request, json
 from pymongo import MongoClient
 
@@ -15,17 +18,91 @@ from sklearn.ensemble import BaggingRegressor
 from sklearn.externals import joblib
 from sklearn.preprocessing import normalize
 
-models = {}
-uniqueID = 0
+partial_stage_models = {}
+partial_stage_models_unique_id = 0
+
+whole_models = {}
+whole_models_unique_id = 0
+
+@app.route('/getExecTime', methods=['POST'])
+def getExecTime():
+    global whole_models_unique_id
+    data = request.json
+
+    client = MongoClient('localhost', 27017)
+    print(str(client))
+    db = client['dioneJson']
+    collection = db['Stuff']
+
+    name = data['appName']
+
+    data_headers = {'executors': [], 'time': [], 'inputSplit': [], 'executorMemory': [], 'cores': [], 'stages': []}
+    get_exec_times_query = {"application_name": name}
+    docs = collection.find(get_exec_times_query)
+    exec_sums = []
+    parser = dateutil.parser
+    for doc in docs:
+        attempts = doc['attempts'][0]
+        a = parser.parse(attempts['startTime'])
+        b = parser.parse(attempts['endTime'])
+        exec_sums.append(int((b-a).total_seconds()))
+
+        environment_list = doc['environment']
+        execMemory = environment_list['spark@executor@memory']
+        split = environment_list['spark@split']
+        executors = doc['executors']
+        cores = environment_list['spark@cores@max']
+        stages = len(doc['stages'])
+        time = int((b-a).total_seconds())
+
+        data_headers['inputSplit'].append(float(split.replace('@', '.')))
+        data_headers['executorMemory'].append(int(execMemory[:-1]))
+        data_headers['executors'].append(len(executors))
+        data_headers['time'].append(time)
+        data_headers['cores'].append(cores)
+        data_headers['stages'].append(stages)
+
+    df = pd.DataFrame.from_dict(data_headers)
+    print('got data, preparing to train model')
+    y = df['time']
+    x = df.drop('time', 1)
+
+    regressor = BaggingRegressor()
+    fit = regressor.fit(x, y)
+
+    print('trained, now saving model')
+    print('done, returning')
+    whole_models[whole_models_unique_id] = regressor
+    whole_models_unique_id += 1
+    return str(whole_models_unique_id) + ',' + str(sum(exec_sums))
+
+    #      get all attempt time diff for app name
+    #      create model for whole app
+    #  return model_id, sum(exec_times)
 
 
-@app.route('/profiler', methods=['POST'])
-def predict():
+
+
+@app.route('/profiler/stages', methods=['POST'])
+def predict_stages():
     data = request.json
 
     id = data['predictionModelId']
     features = data['features']
-    regressor = models[id]
+    regressor = partial_stage_models[id]
+    y_pred = regressor.predict([features])
+
+    print(y_pred)
+
+    return str(y_pred[0])
+
+@app.route('/profiler/whole', methods=['POST'])
+def predict_whole():
+    data = request.json
+
+    id = data['predictionModelId']
+    features = data['features']
+    regressor = whole_models[id]
     y_pred = regressor.predict([features])
 
     print(y_pred)
@@ -35,13 +112,13 @@ def predict():
 
 @app.route('/train_model', methods=['POST'])
 def train():
-    global uniqueID
+    global partial_stage_models_unique_id
     data = request.json
 
     client = MongoClient('localhost', 27017)
     print(str(client))
     db = client['dioneJson']
-    collection = db['AllApps']
+    collection = db['Stuff']
 
     name = data['appName']
     stage = data['stageId']
@@ -80,16 +157,16 @@ def train():
 
     print('trained, now saving model')
 
-    path = 'models/' + name + '/stage_' + str(stage) + '/'
+    path = 'partial_stage_models/' + name + '/stage_' + str(stage) + '/'
     if not os.path.exists(path):
         os.makedirs(path)
-    fl = path + str(uniqueID) + '.pkl'
+    fl = path + str(partial_stage_models_unique_id) + '.pkl'
     joblib.dump(fit, fl)
 
     print('done, returning')
-    uniqueID += 1
-    models[uniqueID] = regressor
-    return str(uniqueID)
+    partial_stage_models[partial_stage_models_unique_id] = regressor
+    partial_stage_models_unique_id += 1
+    return str(partial_stage_models_unique_id)
 
 
 @app.route('/test')

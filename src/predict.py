@@ -27,7 +27,7 @@ from sklearn.feature_selection import SelectKBest
 
 models = {"Linear Regression": LinearRegression(fit_intercept=False), "Random Forest Regressor": RandomForestRegressor(),
            "Bayesian Ridge": BayesianRidge(),
-          "Bagging Regressor": BaggingRegressor(), "Kernel Ridge": KernelRidge(), "Decision Tree": DecisionTreeRegressor()}
+          "Bagging Regressor": BaggingRegressor(base_estimator=RandomForestRegressor()), "Kernel Ridge": KernelRidge(), "Decision Tree": DecisionTreeRegressor()}
 
 dataHeaders = [#'applicationName', 'process',
                'executors', 'time', 'inputSplit', 'executorMemory', 'cores', 'application_id']
@@ -37,7 +37,7 @@ def loadData(name, data_headers, string_dict):
     client = MongoClient('localhost', 27017)
     print(str(client))
     db = client['dioneJson']
-    collection = db['AllApps']
+    collection = db['Stuff']
 
     data_by_stages = {}
     stages_by_app = {name: {}}
